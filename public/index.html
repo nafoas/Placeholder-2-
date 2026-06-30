@@ -109,12 +109,16 @@
 
   // The whole game (standing + every persona's trust and memory) lives here and
   // is saved to the browser, so it persists for as long as the game lasts.
-  const defaultGame = () => ({ turn: 1, approval: 50, personaState: {} });
+  const defaultGame = () => ({ turn: 1, approval: 50, policyCount: 0, personaState: {} });
 
   function load() {
     try {
       const s = JSON.parse(localStorage.getItem(SAVE_KEY));
-      if (s && typeof s.approval === "number") return s;
+      if (s && typeof s.approval === "number") {
+        // migrate older saves that predate the running-average policy count
+        if (typeof s.policyCount !== "number") s.policyCount = Math.max(0, (s.turn || 1) - 1);
+        return s;
+      }
     } catch (_) {}
     return defaultGame();
   }
@@ -185,13 +189,14 @@
         method: "POST",
         headers: { "Content-Type": "application/json" },
         // send the carried-forward standing + memory + trust so personas remember
-        body: JSON.stringify({ policy, state: { turn: game.turn, approval: game.approval, personaState: game.personaState } }),
+        body: JSON.stringify({ policy, state: { turn: game.turn, approval: game.approval, policyCount: game.policyCount, personaState: game.personaState } }),
       }).then((r) => r.json());
       if (res.error) throw new Error(res.error);
 
       // apply the updated state the backend returns
       game.approval = res.approval;
       game.turn = res.state.turn;
+      game.policyCount = res.state.policyCount;
       game.personaState = res.state.personaState;
       save();
 

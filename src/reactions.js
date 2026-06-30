@@ -5,12 +5,14 @@
 // SCORING MODEL
 //   - Each persona rates the policy 0-100 (50 = indifferent/routine; ~5 or ~95
 //     only when a group genuinely hates or loves it). Trust colours the rating.
-//   - The policy's national reaction = the (population-weighted) average of all
-//     persona scores.
-//   - National approval (0-100) is that policy reaction blended into the current
-//     approval each turn, so approval is a smoothed aggregate of every policy
-//     reaction over time. Balance is emergent: a 95 from one group tends to come
-//     with a 5 from another, so the average pulls back toward the middle.
+//   - Every persona counts EQUALLY: an individual elite wields far more power
+//     than an individual worker, so a small elite bloc balances a large popular
+//     one. The policy's national reaction is the plain average of the scores.
+//   - National approval (0-100) is the running average of every policy reaction
+//     to date — your standing IS the mean of how the nation received everything
+//     you have passed. Balance is emergent (a 95 from one group tends to come
+//     with a 5 from another), but genuinely broad-appeal policies can still score
+//     high and broadly-hated ones low; nothing is flattened toward 50.
 //
 // MEMORY (per persona, fades with age — no hard forget)
 //   - recent (last 5): detailed — the policy, the stance, their actual words.
@@ -25,11 +27,6 @@ const HAS_KEY = Boolean(process.env.ANTHROPIC_API_KEY);
 const client = HAS_KEY ? new Anthropic() : null;
 
 export const MODE = HAS_KEY ? "live" : "mock";
-
-// How hard a single turn's policy reaction pulls national approval. 0.5 = a
-// straight average of (current approval, this policy's reaction). Lower = the
-// nation's mood changes more slowly across turns.
-const BLEND = Number(process.env.APPROVAL_BLEND) || 0.5;
 
 const STANCES = ["strongly_oppose", "oppose", "neutral", "support", "strongly_support"];
 const TRUST_START = 50;
@@ -251,6 +248,7 @@ async function reactOne(persona, policy, turn, prior) {
 export async function runTurn(policy, incoming) {
   const turn = Number(incoming?.turn) || 1;
   const approval = typeof incoming?.approval === "number" ? incoming.approval : 50;
+  const policyCount = Number(incoming?.policyCount) || 0; // policies enacted so far
   const prevState = incoming?.personaState || {};
 
   const results = await Promise.all(PERSONAS.map((p) => reactOne(p, policy, turn, prevState[p.id])));
@@ -259,13 +257,15 @@ export async function runTurn(policy, incoming) {
   const personaState = {};
   PERSONAS.forEach((p, i) => { personaState[p.id] = results[i].state; });
 
-  // Policy's national reaction = population-weighted average of persona scores.
-  let weighted = 0, totalWeight = 0;
-  for (const r of reactions) { weighted += r.score * r.weight; totalWeight += r.weight; }
-  const policyReaction = totalWeight ? weighted / totalWeight : 50;
+  // Policy's national reaction = plain, equal-weight average of persona scores.
+  const policyReaction = reactions.length
+    ? reactions.reduce((sum, r) => sum + r.score, 0) / reactions.length
+    : 50;
 
-  // National approval = that reaction blended into current approval.
-  const newApproval = Math.max(0, Math.min(100, approval * (1 - BLEND) + policyReaction * BLEND));
+  // National approval = the running average of every policy reaction to date.
+  // newMean = oldMean + (reaction - oldMean) / (count + 1); with count = 0 the
+  // very first policy sets approval directly, discarding the 50 placeholder.
+  const newApproval = Math.max(0, Math.min(100, approval + (policyReaction - approval) / (policyCount + 1)));
 
   return {
     mode: MODE,
@@ -274,6 +274,6 @@ export async function runTurn(policy, incoming) {
     policyReaction: Math.round(policyReaction * 10) / 10,
     approval: Math.round(newApproval * 10) / 10,
     approvalChange: Math.round((newApproval - approval) * 10) / 10,
-    state: { turn: turn + 1, approval: newApproval, personaState },
+    state: { turn: turn + 1, approval: newApproval, policyCount: policyCount + 1, personaState },
   };
 }
