@@ -7,6 +7,9 @@
 //     it. 0 is the floor: a policy only climbs above it by genuinely giving a
 //     group something to approve of, so nonsense, irrelevant, or harmful policies
 //     score very low rather than snapping to a "neutral" 50. Trust colours it.
+//   - Order matters: each call reasons (assessment) -> commits the score -> then
+//     writes the reaction FROM that score. The number drives the words, never
+//     the reverse, so a confused reaction can't corrupt the game-relevant score.
 //   - Every persona counts EQUALLY: an individual elite wields far more power
 //     than an individual worker, so a small elite bloc balances a large popular
 //     one. The policy's national reaction is the plain average of the scores.
@@ -62,17 +65,29 @@ const REACTION_FORMAT = {
   schema: {
     type: "object",
     properties: {
+      assessment: {
+        type: "string",
+        description:
+          "FIRST. In one brief sentence, weigh what this specific policy does for your group, given your " +
+          "interests, your memory of this President, and how much you trust them. Reason here before scoring.",
+      },
       score: {
         type: "integer",
         description:
-          "0-100: how much you, and people like you, actually approve of this policy. 0 is the floor — a policy " +
-          "earns a higher score only by genuinely giving your group something to approve of. Nonsense, incoherent " +
-          "or empty announcements, policies irrelevant to you, or ones that harm you give you little to approve, " +
-          "so they score very low (often 0-20), NOT 50 — there is no neutral default. Scores rise only as the " +
-          "policy genuinely serves or pleases your group, reaching 80-100 when it strongly does. Already account " +
-          "for how much you trust this President.",
+          "SECOND, from your assessment: 0-100 for how much you, and people like you, actually approve of this " +
+          "policy. 0 is the floor — a policy earns a higher score only by genuinely giving your group something " +
+          "to approve of. Nonsense, incoherent or empty announcements, policies irrelevant to you, or ones that " +
+          "harm you give you little to approve, so they score very low (often 0-20), NOT 50 — there is no neutral " +
+          "default. Scores rise only as the policy genuinely serves or pleases your group, reaching 80-100 when " +
+          "it strongly does. Use the full range; your number reflects YOUR group's particular angle, so different " +
+          "groups will often land on quite different scores. Already account for how much you trust this President.",
       },
-      reaction: { type: "string", description: "One or two sentences, in character and in your own voice." },
+      reaction: {
+        type: "string",
+        description:
+          "THIRD. One or two sentences, in character, EXPRESSING the score you just gave — your words follow the " +
+          "number (a score near 0 reads as contempt or alarm, near 100 as delight). Never contradict your score.",
+      },
       memory_note: {
         type: "string",
         description:
@@ -84,7 +99,7 @@ const REACTION_FORMAT = {
           "How this policy shifts your personal trust in the President going forward, -8 to +8. Usually small (-2..+2); reserve the extremes for real betrayals or genuine surprises.",
       },
     },
-    required: ["score", "reaction", "memory_note", "trust_delta"],
+    required: ["assessment", "score", "reaction", "memory_note", "trust_delta"],
     additionalProperties: false,
   },
 };
@@ -151,14 +166,13 @@ function buildSystem(persona, mem) {
   }
 
   s +=
-    `React to the policy below as THIS person genuinely would, judging it by how it affects you and ` +
-    `people like you, and let your memory of this President shape how you hear them now. Stay fully in ` +
-    `character. Then rate the policy from 0 to 100 for how much you actually approve of it: 0 is the floor, ` +
-    `and a policy only climbs above it by genuinely giving you something to approve of. Nonsense, incoherent ` +
-    `or empty announcements, anything irrelevant to you, or anything that harms you scores very low (often ` +
-    `0-20) — there is no neutral 50 to fall back on. If the announcement is gibberish or unserious, that is ` +
-    `alarming from a head of state, so score it very low and react accordingly. Finally, record a terse ` +
-    `one-line memory_note, and a trust_delta for how this changes your personal trust.`;
+    `React to the policy below as THIS person genuinely would. Work strictly in this order: (1) 'assessment' — ` +
+    `briefly weigh what the policy does for you, given your interests, your memory of this President, and your ` +
+    `trust in them; (2) 'score' (0-100) — derived from that assessment, where 0 is the floor and a policy only ` +
+    `climbs above it by genuinely giving you something to approve of, so nonsense, empty, irrelevant, or harmful ` +
+    `policies score very low (often 0-20) with no neutral 50 to fall back on; (3) 'reaction' — written to express ` +
+    `that score in character, so the words follow the number, never the reverse. Then record a terse 'memory_note' ` +
+    `and a 'trust_delta' for how this changes your personal trust.`;
 
   return s;
 }
@@ -192,10 +206,12 @@ async function summarizeEra(persona, notes) {
 // --- Per-turn reaction (live or mock) --------------------------------------
 function mockReaction(persona, policy) {
   const seed = (persona.id.length + policy.length) % 5;
+  const score = [15, 38, 50, 65, 88][seed];
   return {
-    score: [15, 38, 50, 65, 88][seed],
+    assessment: `[mock] weighing this for ${persona.region}.`,
+    score,
     reaction: `[mock] As a ${persona.name.toLowerCase()} I'd weigh this for ${persona.region}.`,
-    memory_note: `Rated a policy touching ${persona.region} around ${[15, 38, 50, 65, 88][seed]}/100.`,
+    memory_note: `Rated a policy touching ${persona.region} around ${score}/100.`,
     trust_delta: [-3, -1, 0, 1, 3][seed],
   };
 }
