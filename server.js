@@ -1,6 +1,7 @@
 // Tiny backend. It holds the Claude API key (never the browser) and exposes a
 // single endpoint the frontend calls each turn. Serves the static UI too.
 
+import "./src/loadkey.js"; // must be first: loads the key from API_KEY.txt
 import express from "express";
 import { fileURLToPath } from "url";
 import { dirname, join } from "path";

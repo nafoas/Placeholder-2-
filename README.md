@@ -28,14 +28,18 @@ The API key lives **only on the server** — never ship it in the browser.
 
 ```bash
 npm install
-# optional but recommended — live AI reactions:
-export ANTHROPIC_API_KEY=sk-ant-...    # get one at https://console.anthropic.com/
 npm start
 # open http://localhost:3000
 ```
 
+**To get live AI reactions, add your key the easy way:** open the visible file
+**`API_KEY.txt`**, replace `PASTE_KEY_HERE` with your key (from
+https://console.anthropic.com → Settings → API Keys), and save. That's it.
+
 Without a key the server runs in **mock mode** (deterministic stub reactions) so you
-can click around offline. Set the key to get real, in-character reactions.
+can click around offline. `API_KEY.txt` is gitignored, so your key never gets
+committed. (Advanced users can instead set the `ANTHROPIC_API_KEY` env var or a
+`.env` file — those take precedence.)
 
 ## Model & cost
 
