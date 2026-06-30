@@ -1,0 +1,24 @@
+# One-click hosting config for Render (https://render.com).
+#
+# How to use it (all in the browser — no terminal needed):
+#   1. Sign up at render.com (you can log in with GitHub).
+#   2. Click "New +" -> "Blueprint".
+#   3. Connect this GitHub repository. Render reads this file automatically.
+#   4. When it asks, paste your ANTHROPIC_API_KEY into the form field.
+#      (It is stored in Render's settings, never in the repo.)
+#   5. Click "Apply" / "Deploy". After a minute you get a public URL to share.
+#
+# To change the key later, or set a cheaper model: in the Render dashboard open
+# the service -> "Environment" -> edit the values.
+services:
+  - type: web
+    name: sordland-simulator
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: ANTHROPIC_API_KEY
+        sync: false # Render prompts you for this; it is never read from the repo
+      - key: CLAUDE_MODEL
+        value: claude-opus-4-8
