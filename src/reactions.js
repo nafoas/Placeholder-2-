@@ -1,23 +1,21 @@
-// The "brain": turns a policy announcement into each persona's reaction, and
-// carries a graded, decaying memory + a hidden personal-trust score forward
-// between turns.
+// The "brain": turns a policy announcement into each persona's reaction, scores
+// it, and carries a graded, decaying memory + a hidden personal-trust score
+// forward between turns.
 //
-// Memory works in three tiers per persona, getting fuzzier with age (like real
-// memory), so history never needs a hard "forget":
-//   - recent (last 5):  detailed — the policy, the stance, their actual words.
-//   - mid (next ~20):   compressed one-line notes ("backed the wage hike, wary").
-//   - eras (older):     batches folded into one-sentence "broadly they felt…".
+// SCORING MODEL
+//   - Each persona rates the policy 0-100 (50 = indifferent/routine; ~5 or ~95
+//     only when a group genuinely hates or loves it). Trust colours the rating.
+//   - The policy's national reaction = the (population-weighted) average of all
+//     persona scores.
+//   - National approval (0-100) is that policy reaction blended into the current
+//     approval each turn, so approval is a smoothed aggregate of every policy
+//     reaction over time. Balance is emergent: a 95 from one group tends to come
+//     with a 5 from another, so the average pulls back toward the middle.
 //
-// One Claude call per persona per turn returns the public reaction plus a
-// memory_note and a trust_delta. A separate, occasional call folds an aged-out
-// batch of notes into an era summary.
-//
-// Per-persona state shape (held by the client, sent each turn):
-//   { trust: 0-100,
-//     recent: [{turn, policy, stance, delta, reaction, note}],
-//     mid:    [{turn, note}],
-//     eras:   [{fromTurn, toTurn, summary}],
-//     pendingEra: [{turn, note}] }   // overflow waiting to be summarized
+// MEMORY (per persona, fades with age — no hard forget)
+//   - recent (last 5): detailed — the policy, the stance, their actual words.
+//   - mid (next ~20):  compressed one-line notes.
+//   - eras (older):    batches folded into one-sentence "broadly they felt…".
 
 import Anthropic from "@anthropic-ai/sdk";
 import { PERSONAS } from "./personas.js";
@@ -28,25 +26,41 @@ const client = HAS_KEY ? new Anthropic() : null;
 
 export const MODE = HAS_KEY ? "live" : "mock";
 
+// How hard a single turn's policy reaction pulls national approval. 0.5 = a
+// straight average of (current approval, this policy's reaction). Lower = the
+// nation's mood changes more slowly across turns.
+const BLEND = Number(process.env.APPROVAL_BLEND) || 0.5;
+
 const STANCES = ["strongly_oppose", "oppose", "neutral", "support", "strongly_support"];
 const TRUST_START = 50;
-const RECENT_CAP = 5; // detailed memories kept verbatim
-const MID_CAP = 20; // compressed notes kept after that
-const ERA_GROUP = 8; // fold into an era summary once this many notes age out of mid
+const RECENT_CAP = 5;
+const MID_CAP = 20;
+const ERA_GROUP = 8;
 
 const trim = (s, n) => { s = String(s || "").trim(); return s.length > n ? s.slice(0, n - 1) + "…" : s; };
 const clamp = (n, lo, hi) => Math.max(lo, Math.min(hi, Math.round(Number(n) || 0)));
+
+// Map a 0-100 score to one of five stance labels for the UI.
+function stanceFromScore(score) {
+  if (score < 20) return "strongly_oppose";
+  if (score < 40) return "oppose";
+  if (score < 60) return "neutral";
+  if (score < 80) return "support";
+  return "strongly_support";
+}
 
 const REACTION_FORMAT = {
   type: "json_schema",
   schema: {
     type: "object",
     properties: {
-      stance: { type: "string", enum: STANCES },
-      approval_change: {
+      score: {
         type: "integer",
         description:
-          "How this policy shifts your approval of the President, -10 (furious) to +10 (delighted). 0 = no change. Already account for how much you trust this President.",
+          "0-100: how much you, and people like you, like this policy. 50 = indifferent or routine busywork. " +
+          "Below 20 means you dislike it; above 80 means you love it. Be willing to go as low as ~5 or as high " +
+          "as ~95 when a policy genuinely outrages or delights your group; keep routine measures near the middle. " +
+          "Already account for how much you trust this President.",
       },
       reaction: { type: "string", description: "One or two sentences, in character and in your own voice." },
       memory_note: {
@@ -60,7 +74,7 @@ const REACTION_FORMAT = {
           "How this policy shifts your personal trust in the President going forward, -8 to +8. Usually small (-2..+2); reserve the extremes for real betrayals or genuine surprises.",
       },
     },
-    required: ["stance", "approval_change", "reaction", "memory_note", "trust_delta"],
+    required: ["score", "reaction", "memory_note", "trust_delta"],
     additionalProperties: false,
   },
 };
@@ -81,7 +95,6 @@ function trustBand(t) {
   return "deeply trust this President and assume good faith even when you dislike a policy";
 }
 
-// Accept either the new tiered shape or the older {trust, memory[]} shape.
 function normalize(prior) {
   const trust = typeof prior?.trust === "number" ? prior.trust : TRUST_START;
   if (prior && (Array.isArray(prior.recent) || Array.isArray(prior.mid) || Array.isArray(prior.eras))) {
@@ -93,7 +106,6 @@ function normalize(prior) {
       pendingEra: Array.isArray(prior.pendingEra) ? prior.pendingEra : [],
     };
   }
-  // migrate old flat memory -> mid notes
   const old = Array.isArray(prior?.memory) ? prior.memory : [];
   return { trust, recent: [], mid: old.slice(-MID_CAP), eras: [], pendingEra: [] };
 }
@@ -130,15 +142,15 @@ function buildSystem(persona, mem) {
 
   s +=
     `React to the policy below as THIS person genuinely would, judging it by how it affects you and ` +
-    `people like you. Stay fully in character, and let your memory of this President shape how you ` +
-    `hear them now. Rate how it shifts your approval from -10 to +10 (already accounting for trust). ` +
-    `Then record a terse one-line memory_note for yourself, and a trust_delta for how this changes ` +
-    `your personal trust.`;
+    `people like you, and let your memory of this President shape how you hear them now. Stay fully in ` +
+    `character. Then rate the policy from 0 to 100 (50 = indifferent/routine; reserve very low ~5-15 or ` +
+    `very high ~85-95 for policies that genuinely enrage or delight your group), record a terse one-line ` +
+    `memory_note, and a trust_delta for how this changes your personal trust.`;
 
   return s;
 }
 
-// --- Era summarization (rare): fold a batch of aged-out notes into one line --
+// --- Era summarization (rare) ----------------------------------------------
 function heuristicEra(notes) {
   return `a blur of ${notes.length} smaller decisions, leaving a vague overall impression`;
 }
@@ -168,10 +180,9 @@ async function summarizeEra(persona, notes) {
 function mockReaction(persona, policy) {
   const seed = (persona.id.length + policy.length) % 5;
   return {
-    stance: STANCES[seed],
-    approval_change: [-6, -2, 0, 3, 7][seed],
+    score: [15, 38, 50, 65, 88][seed],
     reaction: `[mock] As a ${persona.name.toLowerCase()} I'd weigh this for ${persona.region}.`,
-    memory_note: `Reacted (${STANCES[seed].replace(/_/g, " ")}) to a policy touching ${persona.region}.`,
+    memory_note: `Rated a policy touching ${persona.region} around ${[15, 38, 50, 65, 88][seed]}/100.`,
     trust_delta: [-3, -1, 0, 1, 3][seed],
   };
 }
@@ -193,25 +204,19 @@ async function reactOne(persona, policy, turn, prior) {
   try {
     const r = MODE === "live" ? await liveReaction(persona, policy, mem) : mockReaction(persona, policy);
 
-    const delta = clamp(r.approval_change, -10, 10);
-    const stance = STANCES.includes(r.stance) ? r.stance : "neutral";
+    const score = clamp(r.score, 0, 100);
+    const stance = stanceFromScore(score);
     const newTrust = clamp(mem.trust + clamp(r.trust_delta, -8, 8), 0, 100);
 
-    // Newest detailed memory goes on the recent tier.
     const record = {
-      turn,
-      policy: trim(policy, 120),
-      stance,
-      delta,
-      reaction: trim(r.reaction, 240),
-      note: trim(r.memory_note, 120),
+      turn, policy: trim(policy, 120), stance, score,
+      reaction: trim(r.reaction, 240), note: trim(r.memory_note, 120),
     };
     let recent = [...mem.recent, record];
     let mid = [...mem.mid];
     let pendingEra = [...mem.pendingEra];
     const eras = [...mem.eras];
 
-    // Demote what overflows each tier, getting fuzzier as it falls.
     while (recent.length > RECENT_CAP) {
       const d = recent.shift();
       mid.push({ turn: d.turn, note: d.note });
@@ -227,7 +232,7 @@ async function reactOne(persona, policy, turn, prior) {
     return {
       reaction: {
         id: persona.id, name: persona.name, region: persona.region, weight: persona.weight,
-        stance, approval_change: delta, reaction: record.reaction,
+        score, stance, reaction: record.reaction,
       },
       state: { trust: newTrust, recent, mid, eras, pendingEra },
     };
@@ -235,7 +240,7 @@ async function reactOne(persona, policy, turn, prior) {
     return {
       reaction: {
         id: persona.id, name: persona.name, region: persona.region, weight: persona.weight,
-        stance: "neutral", approval_change: 0,
+        score: 50, stance: "neutral",
         reaction: `(no reaction — error: ${err?.message || "unknown"})`, error: true,
       },
       state: mem,
@@ -245,6 +250,7 @@ async function reactOne(persona, policy, turn, prior) {
 
 export async function runTurn(policy, incoming) {
   const turn = Number(incoming?.turn) || 1;
+  const approval = typeof incoming?.approval === "number" ? incoming.approval : 50;
   const prevState = incoming?.personaState || {};
 
   const results = await Promise.all(PERSONAS.map((p) => reactOne(p, policy, turn, prevState[p.id])));
@@ -253,15 +259,21 @@ export async function runTurn(policy, incoming) {
   const personaState = {};
   PERSONAS.forEach((p, i) => { personaState[p.id] = results[i].state; });
 
+  // Policy's national reaction = population-weighted average of persona scores.
   let weighted = 0, totalWeight = 0;
-  for (const r of reactions) { weighted += r.approval_change * r.weight; totalWeight += r.weight; }
-  const nationalApprovalChange = totalWeight ? Math.round((weighted / totalWeight) * 10) / 10 : 0;
+  for (const r of reactions) { weighted += r.score * r.weight; totalWeight += r.weight; }
+  const policyReaction = totalWeight ? weighted / totalWeight : 50;
+
+  // National approval = that reaction blended into current approval.
+  const newApproval = Math.max(0, Math.min(100, approval * (1 - BLEND) + policyReaction * BLEND));
 
   return {
     mode: MODE,
     model: MODE === "live" ? MODEL : null,
     reactions,
-    nationalApprovalChange,
-    state: { turn: turn + 1, personaState },
+    policyReaction: Math.round(policyReaction * 10) / 10,
+    approval: Math.round(newApproval * 10) / 10,
+    approvalChange: Math.round((newApproval - approval) * 10) / 10,
+    state: { turn: turn + 1, approval: newApproval, personaState },
   };
 }

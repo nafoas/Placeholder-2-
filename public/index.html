@@ -82,8 +82,8 @@
     <div style="flex:1">
       <div class="bar"><span id="bar"></span></div>
       <div class="meta">
-        <span id="turnLabel">Turn 1</span> · National approval · last turn:
-        <span id="lastChange">—</span> ·
+        <span id="turnLabel">Turn 1</span> · last policy reaction <span id="policyScore">—</span>/100 ·
+        approval <span id="lastChange">—</span> ·
         <a href="#" id="newGame" style="color:var(--muted)">new game</a>
       </div>
     </div>
@@ -103,7 +103,8 @@
 <script>
   const SAVE_KEY = "sordland_save_v1";
   const $ = (id) => document.getElementById(id);
-  const stanceColor = (d) => d > 1 ? "var(--pos)" : d < -1 ? "var(--neg)" : "var(--neutral)";
+  const scoreColor = (s) => s >= 60 ? "var(--pos)" : s < 40 ? "var(--neg)" : "var(--neutral)";
+  const changeColor = (d) => d > 0 ? "var(--pos)" : d < 0 ? "var(--neg)" : "var(--neutral)";
   const clamp = (n) => Math.max(0, Math.min(100, n));
 
   // The whole game (standing + every persona's trust and memory) lives here and
@@ -121,13 +122,14 @@
 
   let game = load();
 
-  function renderApproval(lastChange) {
+  function renderApproval(policyReaction, change) {
     $("approval").textContent = Math.round(game.approval);
     $("bar").style.width = clamp(game.approval) + "%";
     $("turnLabel").textContent = "Turn " + game.turn;
-    if (lastChange !== undefined && lastChange !== null) {
-      const sign = lastChange > 0 ? "+" : "";
-      $("lastChange").innerHTML = `<b style="color:${stanceColor(lastChange)}">${sign}${lastChange}</b>`;
+    if (policyReaction !== undefined && policyReaction !== null) $("policyScore").textContent = policyReaction;
+    if (change !== undefined && change !== null) {
+      const sign = change > 0 ? "+" : "";
+      $("lastChange").innerHTML = `<b style="color:${changeColor(change)}">${sign}${change}</b>`;
     }
   }
 
@@ -136,18 +138,17 @@
     box.innerHTML = "";
     reactions
       .slice()
-      .sort((a, b) => b.approval_change - a.approval_change)
+      .sort((a, b) => b.score - a.score)
       .forEach((r) => {
-        const sign = r.approval_change > 0 ? "+" : "";
         const card = document.createElement("div");
         card.className = "card";
-        card.style.borderLeftColor = stanceColor(r.approval_change);
+        card.style.borderLeftColor = scoreColor(r.score);
         card.innerHTML =
           `<div class="top">
              <div><span class="who">${r.name}</span> <span class="region">· ${r.region}</span></div>
-             <div class="delta" style="color:${stanceColor(r.approval_change)}">${sign}${r.approval_change}</div>
+             <div class="delta" style="color:${scoreColor(r.score)}">${r.score}</div>
            </div>
-           <div class="stance">${r.stance.replace(/_/g, " ")}</div>
+           <div class="stance">${r.stance.replace(/_/g, " ")} · ${r.score}/100</div>
            <div class="react">${r.reaction}</div>`;
         box.appendChild(card);
       });
@@ -167,6 +168,7 @@
     game = defaultGame();
     save();
     $("reactions").innerHTML = '<div class="empty">No policy enacted yet.</div>';
+    $("policyScore").textContent = "—";
     $("lastChange").textContent = "—";
     renderApproval();
   });
@@ -182,18 +184,18 @@
       const res = await fetch("/api/turn", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        // send the carried-forward memory + trust so personas remember
-        body: JSON.stringify({ policy, state: { turn: game.turn, personaState: game.personaState } }),
+        // send the carried-forward standing + memory + trust so personas remember
+        body: JSON.stringify({ policy, state: { turn: game.turn, approval: game.approval, personaState: game.personaState } }),
       }).then((r) => r.json());
       if (res.error) throw new Error(res.error);
 
       // apply the updated state the backend returns
-      game.personaState = res.state.personaState;
+      game.approval = res.approval;
       game.turn = res.state.turn;
-      game.approval = clamp(game.approval + res.nationalApprovalChange);
+      game.personaState = res.state.personaState;
       save();
 
-      renderApproval(res.nationalApprovalChange);
+      renderApproval(res.policyReaction, res.approvalChange);
       renderReactions(res.reactions);
       $("hint").textContent = "The nation remembers. Keep going — or contradict yourself and see who notices.";
     } catch (err) {
