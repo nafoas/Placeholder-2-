@@ -1,0 +1,14 @@
+{
+  "name": "sordland-simulator",
+  "version": "0.1.0",
+  "description": "An AI-powered political simulator set in the Republic of Sordland (Suzerain universe). Announce policies; AI personas representing Sordish demographics react and your standing shifts.",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.69.0",
+    "express": "^4.21.2"
+  }
+}

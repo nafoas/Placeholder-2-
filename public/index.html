@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Sordland Simulator — Office of the President</title>
+<style>
+  :root {
+    --bg: #161a1d;
+    --panel: #1e2429;
+    --panel-2: #252c32;
+    --ink: #e8e6df;
+    --muted: #9aa3a8;
+    --line: #333c43;
+    --accent: #b9892f;       /* sordish gold */
+    --pos: #4f9d69;
+    --neg: #bd4b4b;
+    --neutral: #8a8f93;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: Georgia, "Times New Roman", serif;
+    background: var(--bg);
+    color: var(--ink);
+    line-height: 1.5;
+  }
+  header {
+    border-bottom: 2px solid var(--accent);
+    padding: 20px 24px 14px;
+  }
+  header h1 { margin: 0; font-size: 22px; letter-spacing: 0.5px; }
+  header .sub { color: var(--muted); font-size: 13px; margin-top: 2px; }
+  .mode-tag {
+    float: right; font-size: 11px; text-transform: uppercase; letter-spacing: 1px;
+    color: var(--muted); border: 1px solid var(--line); border-radius: 3px; padding: 3px 8px;
+  }
+  main { max-width: 920px; margin: 0 auto; padding: 22px 18px 60px; }
+  .approval {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 6px;
+    padding: 16px 18px; margin-bottom: 20px; display: flex; align-items: center; gap: 18px;
+  }
+  .approval .num { font-size: 34px; font-weight: bold; min-width: 90px; text-align: center; }
+  .approval .meta { color: var(--muted); font-size: 13px; }
+  .bar { flex: 1; height: 10px; background: var(--panel-2); border-radius: 5px; overflow: hidden; }
+  .bar > span { display: block; height: 100%; background: var(--accent); width: 50%; transition: width .4s; }
+  form { display: flex; gap: 10px; margin-bottom: 8px; }
+  textarea {
+    flex: 1; min-height: 70px; resize: vertical; background: var(--panel); color: var(--ink);
+    border: 1px solid var(--line); border-radius: 6px; padding: 12px; font-family: inherit; font-size: 15px;
+  }
+  button {
+    background: var(--accent); color: #1a1a1a; border: none; border-radius: 6px; padding: 0 22px;
+    font-family: inherit; font-size: 15px; font-weight: bold; cursor: pointer;
+  }
+  button:disabled { opacity: .5; cursor: default; }
+  .hint { color: var(--muted); font-size: 12px; margin: 0 0 22px; }
+  .reactions { display: grid; gap: 12px; }
+  .card {
+    background: var(--panel); border: 1px solid var(--line); border-left-width: 4px; border-radius: 6px;
+    padding: 12px 14px;
+  }
+  .card .top { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
+  .card .who { font-weight: bold; }
+  .card .region { color: var(--muted); font-size: 12px; font-weight: normal; }
+  .card .delta { font-weight: bold; font-size: 15px; min-width: 42px; text-align: right; }
+  .card .react { margin-top: 6px; color: var(--ink); font-size: 14px; }
+  .card .stance { font-size: 11px; text-transform: uppercase; letter-spacing: .5px; color: var(--muted); }
+  .empty { color: var(--muted); text-align: center; padding: 40px 0; }
+</style>
+</head>
+<body>
+<header>
+  <span class="mode-tag" id="mode">…</span>
+  <h1>Office of the President — Republic of Sordland</h1>
+  <div class="sub">1954. Announce a policy. The nation reacts.</div>
+</header>
+
+<main>
+  <div class="approval">
+    <div class="num" id="approval">50</div>
+    <div style="flex:1">
+      <div class="bar"><span id="bar"></span></div>
+      <div class="meta" id="approvalMeta">National approval (starts at 50). Last turn: —</div>
+    </div>
+  </div>
+
+  <form id="policyForm">
+    <textarea id="policy" placeholder="e.g. Nationalise Bergia Steel and guarantee every worker a minimum wage."></textarea>
+    <button type="submit" id="enact">Enact</button>
+  </form>
+  <p class="hint" id="hint">Tip: try something that helps one group at another's expense and watch the room split.</p>
+
+  <div class="reactions" id="reactions">
+    <div class="empty">No policy enacted yet.</div>
+  </div>
+</main>
+
+<script>
+  let approval = 50;
+
+  const $ = (id) => document.getElementById(id);
+  const stanceColor = (delta) => delta > 1 ? "var(--pos)" : delta < -1 ? "var(--neg)" : "var(--neutral)";
+
+  function renderApproval(lastChange) {
+    $("approval").textContent = Math.round(approval);
+    $("bar").style.width = Math.max(0, Math.min(100, approval)) + "%";
+    if (lastChange !== undefined) {
+      const sign = lastChange > 0 ? "+" : "";
+      $("approvalMeta").innerHTML = `National approval. Last turn: <b style="color:${stanceColor(lastChange)}">${sign}${lastChange}</b>`;
+    }
+  }
+
+  function renderReactions(reactions) {
+    const box = $("reactions");
+    box.innerHTML = "";
+    reactions
+      .slice()
+      .sort((a, b) => b.approval_change - a.approval_change)
+      .forEach((r) => {
+        const sign = r.approval_change > 0 ? "+" : "";
+        const card = document.createElement("div");
+        card.className = "card";
+        card.style.borderLeftColor = stanceColor(r.approval_change);
+        card.innerHTML =
+          `<div class="top">
+             <div><span class="who">${r.name}</span> <span class="region">· ${r.region}</span></div>
+             <div class="delta" style="color:${stanceColor(r.approval_change)}">${sign}${r.approval_change}</div>
+           </div>
+           <div class="stance">${r.stance.replace(/_/g, " ")}</div>
+           <div class="react">${r.reaction}</div>`;
+        box.appendChild(card);
+      });
+  }
+
+  async function init() {
+    try {
+      const s = await fetch("/api/state").then((r) => r.json());
+      $("mode").textContent = s.mode === "live" ? "live AI" : "mock mode";
+    } catch (_) { $("mode").textContent = "offline"; }
+    renderApproval();
+  }
+
+  $("policyForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const policy = $("policy").value.trim();
+    if (!policy) return;
+    $("enact").disabled = true;
+    $("enact").textContent = "…";
+    $("hint").textContent = "The nation is reacting…";
+    try {
+      const res = await fetch("/api/turn", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ policy }),
+      }).then((r) => r.json());
+      if (res.error) throw new Error(res.error);
+
+      approval = Math.max(0, Math.min(100, approval + res.nationalApprovalChange));
+      renderApproval(res.nationalApprovalChange);
+      renderReactions(res.reactions);
+      $("hint").textContent = "Tip: try something that helps one group at another's expense and watch the room split.";
+    } catch (err) {
+      $("hint").textContent = "Error: " + err.message;
+    } finally {
+      $("enact").disabled = false;
+      $("enact").textContent = "Enact";
+    }
+  });
+
+  init();
+</script>
+</body>
+</html>
