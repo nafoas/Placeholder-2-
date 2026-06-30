@@ -81,7 +81,11 @@
     <div class="num" id="approval">50</div>
     <div style="flex:1">
       <div class="bar"><span id="bar"></span></div>
-      <div class="meta" id="approvalMeta">National approval (starts at 50). Last turn: —</div>
+      <div class="meta">
+        <span id="turnLabel">Turn 1</span> · National approval · last turn:
+        <span id="lastChange">—</span> ·
+        <a href="#" id="newGame" style="color:var(--muted)">new game</a>
+      </div>
     </div>
   </div>
 
@@ -97,17 +101,33 @@
 </main>
 
 <script>
-  let approval = 50;
-
+  const SAVE_KEY = "sordland_save_v1";
   const $ = (id) => document.getElementById(id);
-  const stanceColor = (delta) => delta > 1 ? "var(--pos)" : delta < -1 ? "var(--neg)" : "var(--neutral)";
+  const stanceColor = (d) => d > 1 ? "var(--pos)" : d < -1 ? "var(--neg)" : "var(--neutral)";
+  const clamp = (n) => Math.max(0, Math.min(100, n));
+
+  // The whole game (standing + every persona's trust and memory) lives here and
+  // is saved to the browser, so it persists for as long as the game lasts.
+  const defaultGame = () => ({ turn: 1, approval: 50, personaState: {} });
+
+  function load() {
+    try {
+      const s = JSON.parse(localStorage.getItem(SAVE_KEY));
+      if (s && typeof s.approval === "number") return s;
+    } catch (_) {}
+    return defaultGame();
+  }
+  function save() { localStorage.setItem(SAVE_KEY, JSON.stringify(game)); }
+
+  let game = load();
 
   function renderApproval(lastChange) {
-    $("approval").textContent = Math.round(approval);
-    $("bar").style.width = Math.max(0, Math.min(100, approval)) + "%";
-    if (lastChange !== undefined) {
+    $("approval").textContent = Math.round(game.approval);
+    $("bar").style.width = clamp(game.approval) + "%";
+    $("turnLabel").textContent = "Turn " + game.turn;
+    if (lastChange !== undefined && lastChange !== null) {
       const sign = lastChange > 0 ? "+" : "";
-      $("approvalMeta").innerHTML = `National approval. Last turn: <b style="color:${stanceColor(lastChange)}">${sign}${lastChange}</b>`;
+      $("lastChange").innerHTML = `<b style="color:${stanceColor(lastChange)}">${sign}${lastChange}</b>`;
     }
   }
 
@@ -141,6 +161,16 @@
     renderApproval();
   }
 
+  $("newGame").addEventListener("click", (e) => {
+    e.preventDefault();
+    if (!confirm("Start a new game? This wipes your standing and the nation's memory of you.")) return;
+    game = defaultGame();
+    save();
+    $("reactions").innerHTML = '<div class="empty">No policy enacted yet.</div>';
+    $("lastChange").textContent = "—";
+    renderApproval();
+  });
+
   $("policyForm").addEventListener("submit", async (e) => {
     e.preventDefault();
     const policy = $("policy").value.trim();
@@ -152,14 +182,20 @@
       const res = await fetch("/api/turn", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ policy }),
+        // send the carried-forward memory + trust so personas remember
+        body: JSON.stringify({ policy, state: { turn: game.turn, personaState: game.personaState } }),
       }).then((r) => r.json());
       if (res.error) throw new Error(res.error);
 
-      approval = Math.max(0, Math.min(100, approval + res.nationalApprovalChange));
+      // apply the updated state the backend returns
+      game.personaState = res.state.personaState;
+      game.turn = res.state.turn;
+      game.approval = clamp(game.approval + res.nationalApprovalChange);
+      save();
+
       renderApproval(res.nationalApprovalChange);
       renderReactions(res.reactions);
-      $("hint").textContent = "Tip: try something that helps one group at another's expense and watch the room split.";
+      $("hint").textContent = "The nation remembers. Keep going — or contradict yourself and see who notices.";
     } catch (err) {
       $("hint").textContent = "Error: " + err.message;
     } finally {

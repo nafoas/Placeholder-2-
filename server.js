@@ -23,14 +23,18 @@ app.get("/api/state", (req, res) => {
   });
 });
 
-// The core loop: a policy goes in, every persona's reaction comes back.
+// The core loop: a policy (plus the carried-forward game state) goes in, every
+// persona's reaction comes back along with the updated state for next turn.
 app.post("/api/turn", async (req, res) => {
   const policy = (req.body?.policy || "").toString().trim();
   if (!policy) return res.status(400).json({ error: "Provide a non-empty 'policy'." });
   if (policy.length > 4000) return res.status(400).json({ error: "Policy is too long (max 4000 chars)." });
 
+  // The client holds the canonical save and sends the slice we need each turn.
+  const state = (req.body && typeof req.body.state === "object" && req.body.state) || {};
+
   try {
-    const result = await runTurn(policy);
+    const result = await runTurn(policy, state);
     res.json(result);
   } catch (err) {
     console.error("turn failed:", err);
