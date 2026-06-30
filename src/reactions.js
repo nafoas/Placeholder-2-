@@ -3,8 +3,10 @@
 // forward between turns.
 //
 // SCORING MODEL
-//   - Each persona rates the policy 0-100 (50 = indifferent/routine; ~5 or ~95
-//     only when a group genuinely hates or loves it). Trust colours the rating.
+//   - Each persona rates the policy 0-100 for how much they actually approve of
+//     it. 0 is the floor: a policy only climbs above it by genuinely giving a
+//     group something to approve of, so nonsense, irrelevant, or harmful policies
+//     score very low rather than snapping to a "neutral" 50. Trust colours it.
 //   - Every persona counts EQUALLY: an individual elite wields far more power
 //     than an individual worker, so a small elite bloc balances a large popular
 //     one. The policy's national reaction is the plain average of the scores.
@@ -63,10 +65,12 @@ const REACTION_FORMAT = {
       score: {
         type: "integer",
         description:
-          "0-100: how much you, and people like you, like this policy. 50 = indifferent or routine busywork. " +
-          "Below 20 means you dislike it; above 80 means you love it. Be willing to go as low as ~5 or as high " +
-          "as ~95 when a policy genuinely outrages or delights your group; keep routine measures near the middle. " +
-          "Already account for how much you trust this President.",
+          "0-100: how much you, and people like you, actually approve of this policy. 0 is the floor — a policy " +
+          "earns a higher score only by genuinely giving your group something to approve of. Nonsense, incoherent " +
+          "or empty announcements, policies irrelevant to you, or ones that harm you give you little to approve, " +
+          "so they score very low (often 0-20), NOT 50 — there is no neutral default. Scores rise only as the " +
+          "policy genuinely serves or pleases your group, reaching 80-100 when it strongly does. Already account " +
+          "for how much you trust this President.",
       },
       reaction: { type: "string", description: "One or two sentences, in character and in your own voice." },
       memory_note: {
@@ -149,9 +153,12 @@ function buildSystem(persona, mem) {
   s +=
     `React to the policy below as THIS person genuinely would, judging it by how it affects you and ` +
     `people like you, and let your memory of this President shape how you hear them now. Stay fully in ` +
-    `character. Then rate the policy from 0 to 100 (50 = indifferent/routine; reserve very low ~5-15 or ` +
-    `very high ~85-95 for policies that genuinely enrage or delight your group), record a terse one-line ` +
-    `memory_note, and a trust_delta for how this changes your personal trust.`;
+    `character. Then rate the policy from 0 to 100 for how much you actually approve of it: 0 is the floor, ` +
+    `and a policy only climbs above it by genuinely giving you something to approve of. Nonsense, incoherent ` +
+    `or empty announcements, anything irrelevant to you, or anything that harms you scores very low (often ` +
+    `0-20) — there is no neutral 50 to fall back on. If the announcement is gibberish or unserious, that is ` +
+    `alarming from a head of state, so score it very low and react accordingly. Finally, record a terse ` +
+    `one-line memory_note, and a trust_delta for how this changes your personal trust.`;
 
   return s;
 }
