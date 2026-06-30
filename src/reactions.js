@@ -10,9 +10,12 @@
 //     one. The policy's national reaction is the plain average of the scores.
 //   - National approval (0-100) is the running average of every policy reaction
 //     to date — your standing IS the mean of how the nation received everything
-//     you have passed. Balance is emergent (a 95 from one group tends to come
-//     with a 5 from another), but genuinely broad-appeal policies can still score
-//     high and broadly-hated ones low; nothing is flattened toward 50.
+//     you have passed. Each new policy's pull on approval shrinks as your record
+//     grows (an established base stabilises you), but is floored at a cap so the
+//     public can always still move you and approval never freezes. Balance is
+//     emergent (a 95 from one group tends to come with a 5 from another), but
+//     broad-appeal policies can still score high and broadly-hated ones low;
+//     nothing is flattened toward 50.
 //
 // MEMORY (per persona, fades with age — no hard forget)
 //   - recent (last 5): detailed — the policy, the stance, their actual words.
@@ -33,6 +36,12 @@ const TRUST_START = 50;
 const RECENT_CAP = 5;
 const MID_CAP = 20;
 const ERA_GROUP = 8;
+
+// Caps how stiff national approval can get. Early policies count a lot (you have
+// no base yet); once you have ~this many policies on the record, each new one
+// keeps a steady ~1/(cap+1) share of influence rather than shrinking forever, so
+// approval stabilises with an established base but never freezes.
+const STIFFNESS_CAP = Number(process.env.STIFFNESS_CAP) || 12;
 
 const trim = (s, n) => { s = String(s || "").trim(); return s.length > n ? s.slice(0, n - 1) + "…" : s; };
 const clamp = (n, lo, hi) => Math.max(lo, Math.min(hi, Math.round(Number(n) || 0)));
@@ -262,10 +271,14 @@ export async function runTurn(policy, incoming) {
     ? reactions.reduce((sum, r) => sum + r.score, 0) / reactions.length
     : 50;
 
-  // National approval = the running average of every policy reaction to date.
-  // newMean = oldMean + (reaction - oldMean) / (count + 1); with count = 0 the
-  // very first policy sets approval directly, discarding the 50 placeholder.
-  const newApproval = Math.max(0, Math.min(100, approval + (policyReaction - approval) / (policyCount + 1)));
+  // National approval = running average of policy reactions, but the per-policy
+  // weight is floored so approval stiffens with an established base yet never
+  // freezes. While count < cap this is the true cumulative mean (count = 0 makes
+  // the first policy set approval directly, discarding the 50 placeholder); past
+  // the cap it behaves like a rolling average of the last ~STIFFNESS_CAP
+  // policies, so old reactions gradually fade out.
+  const effectiveCount = Math.min(policyCount, STIFFNESS_CAP);
+  const newApproval = Math.max(0, Math.min(100, approval + (policyReaction - approval) / (effectiveCount + 1)));
 
   return {
     mode: MODE,
