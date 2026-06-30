@@ -13,7 +13,12 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 app.use(express.json({ limit: "64kb" }));
-app.use(express.static(join(__dirname, "public")));
+app.use(express.static(join(__dirname, "public"), {
+  setHeaders(res, filePath) {
+    // We iterate fast; never let a browser serve a stale HTML shell.
+    if (filePath.endsWith(".html")) res.setHeader("Cache-Control", "no-cache");
+  },
+}));
 
 // Lightweight metadata so the UI can render the cast and show the mode.
 app.get("/api/state", (req, res) => {
