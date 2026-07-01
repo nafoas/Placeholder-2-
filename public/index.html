@@ -36,13 +36,7 @@
     color: var(--muted); border: 1px solid var(--line); border-radius: 3px; padding: 3px 8px;
   }
   main { max-width: 920px; margin: 0 auto; padding: 22px 18px 60px; }
-  .approval {
-    background: var(--panel); border: 1px solid var(--line); border-radius: 6px;
-    padding: 16px 18px; margin-bottom: 20px; display: flex; align-items: center; gap: 18px;
-  }
-  .approval .num { font-size: 34px; font-weight: bold; min-width: 90px; text-align: center; }
-  .approval .meta { color: var(--muted); font-size: 13px; }
-  .bar { flex: 1; height: 10px; background: var(--panel-2); border-radius: 5px; overflow: hidden; }
+  .bar { height: 10px; background: var(--panel-2); border-radius: 5px; overflow: hidden; }
   .bar > span { display: block; height: 100%; background: var(--accent); width: 50%; transition: width .4s; }
   form { display: flex; gap: 10px; margin-bottom: 8px; }
   textarea {
@@ -76,6 +70,17 @@
   .stat .gaugebar > span { display: block; height: 100%; background: var(--accent); transition: width .4s; }
   .ledger { color: var(--muted); font-size: 13px; font-style: italic; margin: 0 0 20px; min-height: 16px; }
   @media (max-width: 640px) { .indicators { grid-template-columns: repeat(2, 1fr); } }
+  /* The three top-level standing meters. */
+  .scales { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin-bottom: 8px; }
+  .scale { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 16px 18px; text-align: center; }
+  .scale-label { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 1px; }
+  .scale-num { font-size: 38px; font-weight: bold; margin: 4px 0 2px; line-height: 1.1; }
+  .scale-net { font-size: 13px; font-weight: bold; min-height: 17px; }
+  .scale-sub { color: var(--muted); font-size: 12px; margin: 4px 0 12px; }
+  .scale .bar { width: 100%; height: 8px; }
+  .scales-meta { color: var(--muted); font-size: 13px; margin-bottom: 20px; }
+  .scales-meta a { color: var(--muted); }
+  @media (max-width: 680px) { .scales { grid-template-columns: 1fr; } }
 </style>
 </head>
 <body>
@@ -86,16 +91,32 @@
 </header>
 
 <main>
-  <div class="approval">
-    <div class="num" id="approval">50</div>
-    <div style="flex:1">
-      <div class="bar"><span id="bar"></span></div>
-      <div class="meta">
-        <span id="turnLabel">Turn 1</span> · last policy reaction <span id="policyScore">—</span>/100 ·
-        approval <span id="lastChange">—</span> ·
-        <a href="#" id="newGame" style="color:var(--muted)">new game</a>
-      </div>
+  <div class="scales">
+    <div class="scale">
+      <div class="scale-label">Public Support</div>
+      <div class="scale-num" id="approval">50%</div>
+      <div class="scale-net" id="approvalNet"></div>
+      <div class="scale-sub">Voter mood</div>
+      <div class="bar"><span id="bar-public"></span></div>
     </div>
+    <div class="scale">
+      <div class="scale-label">Government Stability</div>
+      <div class="scale-num" id="govStability">50%</div>
+      <div class="scale-net" id="govNet"></div>
+      <div class="scale-sub">Cabinet &amp; agency willingness</div>
+      <div class="bar"><span id="bar-gov"></span></div>
+    </div>
+    <div class="scale">
+      <div class="scale-label">Party Support</div>
+      <div class="scale-num" id="partySupport">50%</div>
+      <div class="scale-net" id="partyNet"></div>
+      <div class="scale-sub" id="partySub">Internal party backing</div>
+      <div class="bar"><span id="bar-party"></span></div>
+    </div>
+  </div>
+  <div class="scales-meta">
+    <span id="turnLabel">Turn 1</span> · last policy reaction <span id="policyScore">—</span>/100 ·
+    <a href="#" id="newGame">new game</a>
   </div>
 
   <div class="indicators" id="indicators"></div>
@@ -125,14 +146,20 @@
     treasury:     { label: "Treasury",     kind: "balance", higherIsBetter: true },
     unemployment: { label: "Unemployment", kind: "percent", higherIsBetter: false },
     inflation:    { label: "Inflation",    kind: "percent", higherIsBetter: false },
-    stability:    { label: "Stability",    kind: "gauge",   higherIsBetter: true },
+    stability:    { label: "Public Order", kind: "gauge",   higherIsBetter: true },
     standing:     { label: "Standing",     kind: "gauge",   higherIsBetter: true },
   };
   const INDICATOR_ORDER = ["treasury", "unemployment", "inflation", "stability", "standing"];
 
-  // The whole game (standing, the nation's indicators, and every persona's trust
-  // and memory) lives here and is saved to the browser, so it persists for the game.
-  const defaultGame = () => ({ turn: 1, approval: 50, policyCount: 0, personaState: {}, indicators: { ...DEFAULT_INDICATORS } });
+  // The party the President leads (drives the Party Support scale). USP by default.
+  const PARTY_NAMES = { usp: "USP", pfjp: "PFJP", nfp: "NFP" };
+
+  // The whole game (the three standing meters, the nation's indicators, the party,
+  // and every persona's trust and memory) lives here and is saved to the browser.
+  const defaultGame = () => ({
+    turn: 1, approval: 50, govStability: 50, partySupport: 50, party: "usp",
+    policyCount: 0, personaState: {}, indicators: { ...DEFAULT_INDICATORS },
+  });
 
   function load() {
     try {
@@ -142,6 +169,10 @@
         if (typeof s.policyCount !== "number") s.policyCount = Math.max(0, (s.turn || 1) - 1);
         // migrate saves from before national indicators existed
         if (!s.indicators || typeof s.indicators !== "object") s.indicators = { ...DEFAULT_INDICATORS };
+        // migrate saves from before the government-stability / party-support scales
+        if (typeof s.govStability !== "number") s.govStability = 50;
+        if (typeof s.partySupport !== "number") s.partySupport = 50;
+        if (!s.party) s.party = "usp";
         return s;
       }
     } catch (_) {}
@@ -151,15 +182,30 @@
 
   let game = load();
 
-  function renderApproval(policyReaction, change) {
-    $("approval").textContent = Math.round(game.approval);
-    $("bar").style.width = clamp(game.approval) + "%";
+  // "Net — ±X" line under a scale. All three meters are higher-is-better, so a
+  // positive change is good (green). Blank when there's no change to show yet.
+  function netHTML(d) {
+    if (d === undefined || d === null) return "";
+    const sign = d > 0 ? "+" : "";
+    return `Net — <span style="color:${changeColor(d)}">${sign}${d}</span>`;
+  }
+
+  // Render the three standing meters. `ch` (optional) holds this turn's changes.
+  function renderScales(ch) {
+    const set = (numId, barId, netId, value, change) => {
+      $(numId).textContent = Math.round(value) + "%";
+      $(barId).style.width = clamp(value) + "%";
+      $(netId).innerHTML = ch ? netHTML(change) : "";
+    };
+    set("approval",     "bar-public", "approvalNet", game.approval,     ch && ch.approval);
+    set("govStability", "bar-gov",    "govNet",      game.govStability, ch && ch.govStability);
+    set("partySupport", "bar-party",  "partyNet",    game.partySupport, ch && ch.partySupport);
+    $("partySub").textContent = (PARTY_NAMES[game.party] || "Party") + " · internal backing";
+  }
+
+  function renderMeta(policyReaction) {
     $("turnLabel").textContent = "Turn " + game.turn;
     if (policyReaction !== undefined && policyReaction !== null) $("policyScore").textContent = policyReaction;
-    if (change !== undefined && change !== null) {
-      const sign = change > 0 ? "+" : "";
-      $("lastChange").innerHTML = `<b style="color:${changeColor(change)}">${sign}${change}</b>`;
-    }
   }
 
   function renderReactions(reactions) {
@@ -228,7 +274,8 @@
       const s = await fetch("/api/state").then((r) => r.json());
       $("mode").textContent = s.mode === "live" ? "live AI" : "mock mode";
     } catch (_) { $("mode").textContent = "offline"; }
-    renderApproval();
+    renderScales();
+    renderMeta();
     renderIndicators();
   }
 
@@ -239,9 +286,9 @@
     save();
     $("reactions").innerHTML = '<div class="empty">No policy enacted yet.</div>';
     $("policyScore").textContent = "—";
-    $("lastChange").textContent = "—";
     $("ledger").textContent = "";
-    renderApproval();
+    renderScales();
+    renderMeta();
     renderIndicators();
   });
 
@@ -256,20 +303,27 @@
       const res = await fetch("/api/turn", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        // send the carried-forward standing + indicators + memory + trust
-        body: JSON.stringify({ policy, state: { turn: game.turn, approval: game.approval, policyCount: game.policyCount, personaState: game.personaState, indicators: game.indicators } }),
+        // send the carried-forward meters + indicators + party + memory + trust
+        body: JSON.stringify({ policy, state: {
+          turn: game.turn, approval: game.approval, govStability: game.govStability, partySupport: game.partySupport,
+          party: game.party, policyCount: game.policyCount, personaState: game.personaState, indicators: game.indicators,
+        } }),
       }).then((r) => r.json());
       if (res.error) throw new Error(res.error);
 
       // apply the updated state the backend returns
       game.approval = res.approval;
+      game.govStability = res.state.govStability;
+      game.partySupport = res.state.partySupport;
+      game.party = res.state.party;
       game.turn = res.state.turn;
       game.policyCount = res.state.policyCount;
       game.personaState = res.state.personaState;
       game.indicators = res.state.indicators;
       save();
 
-      renderApproval(res.policyReaction, res.approvalChange);
+      renderScales({ approval: res.approvalChange, govStability: res.govStabilityChange, partySupport: res.partySupportChange });
+      renderMeta(res.policyReaction);
       renderIndicators(res.indicatorChanges);
       renderReactions(res.reactions);
       $("ledger").textContent = res.ledgerNote || "";

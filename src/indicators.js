@@ -22,7 +22,7 @@ export const INDICATOR_META = {
   treasury:     { label: "Treasury",     kind: "balance", higherIsBetter: true },
   unemployment: { label: "Unemployment", kind: "percent", higherIsBetter: false },
   inflation:    { label: "Inflation",    kind: "percent", higherIsBetter: false },
-  stability:    { label: "Stability",    kind: "gauge",   higherIsBetter: true },
+  stability:    { label: "Public Order",  kind: "gauge",   higherIsBetter: true },
   standing:     { label: "Standing",     kind: "gauge",   higherIsBetter: true },
 };
 

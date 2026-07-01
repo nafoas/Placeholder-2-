@@ -26,6 +26,7 @@ import { WORLD_CODEX } from "./lore.js";
 import {
   INDICATOR_DEFAULTS, NATIONAL_FORMAT, buildNationalSystem, applyDeltas, mockDeltas,
 } from "./indicators.js";
+import { getParty } from "./parties.js";
 
 const MODEL = process.env.CLAUDE_MODEL || "claude-opus-4-8";
 const HAS_KEY = Boolean(process.env.ANTHROPIC_API_KEY);
@@ -287,6 +288,81 @@ async function reactOne(persona, policy, turn, prior) {
   }
 }
 
+// --- Party support (stripped-down: one doctrine check per turn) -------------
+const PARTY_FORMAT = {
+  type: "json_schema",
+  schema: {
+    type: "object",
+    properties: {
+      assessment: {
+        type: "string",
+        description:
+          "FIRST. Briefly weigh how well this policy fits your party's core values — where it pleases the faithful " +
+          "and where it grates against what the party stands for. Reason here before scoring.",
+      },
+      score: {
+        type: "integer",
+        description:
+          "SECOND: 0-100 for how strongly your party's members and machine back THIS policy as true to their core " +
+          "values. 0 = it betrays everything the party stands for; 100 = it is exactly what the party exists to do. " +
+          "Off-doctrine, incoherent, or rival-pandering policies score low — there is no neutral 50 default.",
+      },
+      note: { type: "string", description: "One terse line on the party's reaction. Max ~14 words." },
+    },
+    required: ["assessment", "score", "note"],
+    additionalProperties: false,
+  },
+};
+
+function buildPartySystem(party) {
+  return (
+    `YOU ARE THE PARTY WHIP for the ${party.name} (${party.full}); the President leads YOUR party, and you gauge how ` +
+    `the party's own members and machine receive this policy.\n\n` +
+    `Your party's core values:\n${party.core}\n\n` +
+    `Score how strongly the party faithful back THIS policy as true to those values. This is NOT the public's mood and ` +
+    `NOT the national interest — it is party loyalty measured against party doctrine. A policy squarely in the party's ` +
+    `tradition delights them; one that betrays it, panders to rivals, or repudiates what the party stands for dismays ` +
+    `them, even when the wider public approves. Work in order: 'assessment', then 'score' (0-100, no neutral default), ` +
+    `then a terse 'note'.`
+  );
+}
+
+async function assessPartyLine(policy, party) {
+  if (MODE !== "live") {
+    const seed = (policy.length + party.id.length) % 5;
+    return { assessment: "[mock]", score: [20, 40, 55, 70, 85][seed], note: "[mock] party read." };
+  }
+  try {
+    const resp = await client.messages.create({
+      model: MODEL,
+      max_tokens: 500,
+      system: [
+        { type: "text", text: WORLD_CODEX, cache_control: { type: "ephemeral" } },
+        { type: "text", text: buildPartySystem(party) },
+      ],
+      output_config: { format: PARTY_FORMAT, effort: "low" },
+      messages: [{ role: "user", content: `Policy announced by the President (leader of your party):\n\n"${policy}"` }],
+    });
+    const block = resp.content.find((b) => b.type === "text");
+    return JSON.parse(block.text);
+  } catch (err) {
+    return { assessment: "", score: 50, note: `(party error: ${err?.message || "unknown"})` };
+  }
+}
+
+// --- Government stability (SKELETON — real model comes later) ---------------
+// Government Stability is meant to track administrative strain: how willing the
+// cabinet, ministries, and agencies are to actually carry out the President's
+// orders. That model is TODO; for now this placeholder just keeps the meter
+// alive so the GUI has real movement — governing strains the machinery a little,
+// and it drifts back toward a neutral baseline between shocks.
+function assessGovStability(policy, prevGov) {
+  const drift = (50 - prevGov) * 0.05;
+  const strain = -(0.2 + (String(policy).length % 5) * 0.15); // small, ~ -0.2..-0.8
+  const next = Math.max(0, Math.min(100, prevGov + drift + strain));
+  return Math.round(next * 10) / 10;
+}
+
 // --- National ledger (one neutral estimate per turn) -----------------------
 async function assessNational(policy, indicators) {
   if (MODE !== "live") return mockDeltas(policy);
@@ -305,7 +381,7 @@ async function assessNational(policy, indicators) {
         content:
           `Policy announced by the President:\n\n"${policy}"\n\n` +
           `The nation's current condition: treasury ${indicators.treasury}bn ren, unemployment ` +
-          `${indicators.unemployment}%, inflation ${indicators.inflation}%, stability ${indicators.stability}/100, ` +
+          `${indicators.unemployment}%, inflation ${indicators.inflation}%, public order ${indicators.stability}/100, ` +
           `international standing ${indicators.standing}/100. Estimate how THIS policy shifts each.`,
       }],
     });
@@ -322,11 +398,15 @@ export async function runTurn(policy, incoming) {
   const policyCount = Number(incoming?.policyCount) || 0;
   const prevState = incoming?.personaState || {};
   const prevIndicators = { ...INDICATOR_DEFAULTS, ...(incoming?.indicators || {}) };
+  const prevGov = typeof incoming?.govStability === "number" ? incoming.govStability : 50;
+  const prevParty = typeof incoming?.partySupport === "number" ? incoming.partySupport : 50;
+  const party = getParty(incoming?.party);
 
-  // The 24 opinions and the one neutral ledger estimate run together.
-  const [results, deltas] = await Promise.all([
+  // The 24 opinions, the neutral ledger, and the party whip all run together.
+  const [results, deltas, partyLine] = await Promise.all([
     Promise.all(PERSONAS.map((p) => reactOne(p, policy, turn, prevState[p.id]))),
     assessNational(policy, prevIndicators),
+    assessPartyLine(policy, party),
   ]);
 
   const reactions = results.map((r) => r.reaction);
@@ -354,16 +434,33 @@ export async function runTurn(policy, incoming) {
   const effectiveCount = Math.min(policyCount, STIFFNESS_CAP);
   const newApproval = Math.max(0, Math.min(100, approval + (policyReaction - approval) / (effectiveCount + 1)));
 
+  // Party support = running average of the party-line score, same stiffening as
+  // approval (a stripped-down mirror of the public-support system).
+  const partyScore = clamp(partyLine.score, 0, 100);
+  const newParty = Math.max(0, Math.min(100, prevParty + (partyScore - prevParty) / (effectiveCount + 1)));
+
+  // Government stability — placeholder skeleton for now (see assessGovStability).
+  const newGov = assessGovStability(policy, prevGov);
+
   return {
     mode: MODE,
     model: MODE === "live" ? MODEL : null,
     reactions,
     policyReaction: Math.round(policyReaction * 10) / 10,
-    approval: Math.round(newApproval * 10) / 10,
-    approvalChange: Math.round((newApproval - approval) * 10) / 10,
+    approval: r1(newApproval),
+    approvalChange: r1(newApproval - approval),
+    govStability: newGov,
+    govStabilityChange: r1(newGov - prevGov),
+    partySupport: r1(newParty),
+    partySupportChange: r1(newParty - prevParty),
+    partyScore,
+    party: { id: party.id, name: party.name },
     indicators,
     indicatorChanges,
     ledgerNote: trim(deltas.ledger_note, 160),
-    state: { turn: turn + 1, approval: newApproval, policyCount: policyCount + 1, personaState, indicators },
+    state: {
+      turn: turn + 1, approval: newApproval, policyCount: policyCount + 1, personaState, indicators,
+      govStability: newGov, partySupport: r1(newParty), party: party.id,
+    },
   };
 }
