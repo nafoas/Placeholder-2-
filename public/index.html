@@ -149,10 +149,10 @@
         card.style.borderLeftColor = scoreColor(r.score);
         card.innerHTML =
           `<div class="top">
-             <div><span class="who">${r.name}</span> <span class="region">· ${r.region}</span></div>
+             <div><span class="who">${r.name}</span> <span class="region">· ${r.title}</span></div>
              <div class="delta" style="color:${scoreColor(r.score)}">${r.score}</div>
            </div>
-           <div class="stance">${r.stance.replace(/_/g, " ")} · ${r.score}/100</div>
+           <div class="stance">${r.region} · ${r.stance.replace(/_/g, " ")} · ${r.score}/100</div>
            <div class="react">${r.reaction}</div>`;
         box.appendChild(card);
       });

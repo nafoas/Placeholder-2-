@@ -10,17 +10,10 @@
 //   - Order matters: each call reasons (assessment) -> commits the score -> then
 //     writes the reaction FROM that score. The number drives the words, never
 //     the reverse, so a confused reaction can't corrupt the game-relevant score.
-//   - Every persona counts EQUALLY: an individual elite wields far more power
-//     than an individual worker, so a small elite bloc balances a large popular
-//     one. The policy's national reaction is the plain average of the scores.
-//   - National approval (0-100) is the running average of every policy reaction
-//     to date — your standing IS the mean of how the nation received everything
-//     you have passed. Each new policy's pull on approval shrinks as your record
-//     grows (an established base stabilises you), but is floored at a cap so the
-//     public can always still move you and approval never freezes. Balance is
-//     emergent (a 95 from one group tends to come with a 5 from another), but
-//     broad-appeal policies can still score high and broadly-hated ones low;
-//     nothing is flattened toward 50.
+//   - Every persona counts EQUALLY. The policy's national reaction is the plain
+//     average of the scores. National approval is the running average of every
+//     policy reaction to date, with a floored per-policy weight so it stiffens
+//     with an established base yet never freezes.
 //
 // MEMORY (per persona, fades with age — no hard forget)
 //   - recent (last 5): detailed — the policy, the stance, their actual words.
@@ -42,16 +35,12 @@ const RECENT_CAP = 5;
 const MID_CAP = 20;
 const ERA_GROUP = 8;
 
-// Caps how stiff national approval can get. Early policies count a lot (you have
-// no base yet); once you have ~this many policies on the record, each new one
-// keeps a steady ~1/(cap+1) share of influence rather than shrinking forever, so
-// approval stabilises with an established base but never freezes.
+// Caps how stiff national approval can get (see model note above).
 const STIFFNESS_CAP = Number(process.env.STIFFNESS_CAP) || 12;
 
 const trim = (s, n) => { s = String(s || "").trim(); return s.length > n ? s.slice(0, n - 1) + "…" : s; };
 const clamp = (n, lo, hi) => Math.max(lo, Math.min(hi, Math.round(Number(n) || 0)));
 
-// Map a 0-100 score to one of five stance labels for the UI.
 function stanceFromScore(score) {
   if (score < 20) return "strongly_oppose";
   if (score < 40) return "oppose";
@@ -68,35 +57,36 @@ const REACTION_FORMAT = {
       assessment: {
         type: "string",
         description:
-          "FIRST. In one brief sentence, weigh what this specific policy does for your group, given your " +
-          "interests, your memory of this President, and how much you trust them. Reason here before scoring.",
+          "FIRST. In one brief sentence, weigh what this specific policy does for your group, given your interests, " +
+          "your memory of this President, and how much you trust them. Reason here before scoring.",
       },
       score: {
         type: "integer",
         description:
           "SECOND, from your assessment: 0-100 for how much you, and people like you, actually approve of this " +
-          "policy. 0 is the floor — a policy earns a higher score only by genuinely giving your group something " +
-          "to approve of. Nonsense, incoherent or empty announcements, policies irrelevant to you, or ones that " +
-          "harm you give you little to approve, so they score very low (often 0-20), NOT 50 — there is no neutral " +
-          "default. Scores rise only as the policy genuinely serves or pleases your group, reaching 80-100 when " +
-          "it strongly does. Use the full range; your number reflects YOUR group's particular angle, so different " +
-          "groups will often land on quite different scores. Already account for how much you trust this President.",
+          "policy. 0 is the floor — a policy earns a higher score only by genuinely giving your group something to " +
+          "approve of. Nonsense, incoherent or empty announcements, policies irrelevant to you, or ones that harm you " +
+          "score very low (often 0-20), NOT 50 — there is no neutral default. Scores rise only as the policy genuinely " +
+          "serves or pleases your group, up to 80-100 when it strongly does. Use the full range; your number reflects " +
+          "YOUR group's particular angle. Already account for how much you trust this President.",
       },
       reaction: {
         type: "string",
         description:
-          "THIRD. One or two sentences, in character, EXPRESSING the score you just gave — your words follow the " +
-          "number (a score near 0 reads as contempt or alarm, near 100 as delight). Never contradict your score.",
+          "THIRD. One or two sentences, in your own distinct voice, EXPRESSING the score you just gave — your words " +
+          "follow the number (a score near 0 reads as contempt or alarm, near 100 as delight). Never contradict your score.",
       },
       memory_note: {
         type: "string",
         description:
-          "A terse third-person one-line record of this reaction for your own memory, e.g. 'Backed the wage hike but wary of who really pays.' Max ~14 words.",
+          "A terse third-person one-line record of this reaction for your own memory, e.g. 'Backed the wage hike but " +
+          "wary of who really pays.' Max ~14 words.",
       },
       trust_delta: {
         type: "integer",
         description:
-          "How this policy shifts your personal trust in the President going forward, -8 to +8. Usually small (-2..+2); reserve the extremes for real betrayals or genuine surprises.",
+          "How this policy shifts your personal trust in the President going forward, -8 to +8. Usually small " +
+          "(-2..+2); reserve the extremes for real betrayals or genuine surprises.",
       },
     },
     required: ["assessment", "score", "reaction", "memory_note", "trust_delta"],
@@ -105,12 +95,21 @@ const REACTION_FORMAT = {
 };
 
 const WORLD =
-  `The year is 1954 in the Republic of Sordland, a semi-unitary presidential republic. ` +
-  `The nation is emerging from the long shadow of the Sordish Civil War and is gripped by the ` +
-  `Recession of 1951 — roughly 16% unemployment and 7% inflation. A new President has just taken ` +
-  `office. The political landscape runs from the ruling Sollist USP, to the liberal-democratic PFJP, ` +
-  `to the nationalist National Front Party, with an underground Malenyevist (communist) current and ` +
-  `two superpower blocs (the capitalist ATO and the Malenyevist CSP) watching from abroad.`;
+  `The year is 1954 in the Republic of Sordland, a semi-unitary presidential republic still emerging from two decades ` +
+  `of the founder Tarquin Soll's semi-authoritarian rule, and gripped by the Recession of 1951 (~16% unemployment, ` +
+  `7% inflation). The dominant national creed is SOLLISM — a home-grown, catch-all nationalism: a directed, ` +
+  `protectionist, technocratic state economy ("Sollonomics") with real welfare, sitting between capitalism and ` +
+  `communism; civic (not ethnic) nationalism in doctrine; republican in form. Most ordinary Sords treat Sollonomics ` +
+  `as plain common sense and revere Soll as the founding father who saved the republic from a fascist junta and a ` +
+  `communist general — even those who dislike his authoritarian legacy. Soll is still alive and holds a permanent, ` +
+  `unelected seat in the Grand National Assembly. The ruling USP is Sollist; the PFJP are liberal and social- ` +
+  `democratic reformers; the NFP are ethnic nationalists; the communists and Bludish movements are marginal. Abroad: ` +
+  `a hostile, nuclear-armed Kingdom of Rumburg, and a cold war between the capitalist ATO and the communist CSP, both ` +
+  `courting Sordland's tradition of armed neutrality.\n\n` +
+  `Matters most Sords hold near-sacred — crossing these hard "red lines" outrages even moderates: Soll's special ` +
+  `standing, heavy privatisation, too much free trade, too much immigration, and anti-militarism (gutting the army or ` +
+  `abandoning neutrality). And note the difference between MODERATING what Soll did (widely accepted, even welcomed) ` +
+  `and REPUDIATING Sollism itself (which cools even reformers to a tepid shrug, not warmth).`;
 
 function trustBand(t) {
   if (t < 20) return "barely trust this President and suspect their motives";
@@ -136,13 +135,14 @@ function normalize(prior) {
 }
 
 function buildSystem(persona, mem) {
-  let s = `${WORLD}\n\n${persona.persona}\n\n`;
+  let s = `${WORLD}\n\n`;
+
+  s += `YOU ARE ${persona.name} — the ${persona.title}, from ${persona.region}.\n${persona.persona}\n\n`;
 
   s +=
-    `Your personal read on the current President: you ${trustBand(mem.trust)}. Let this colour how you ` +
-    `receive the policy — when you trust them, an unwelcome policy may earn the benefit of the doubt; ` +
-    `when you don't, even a policy you'd normally like feels suspect coming from them. Never refer to ` +
-    `"trust" as a number or a game mechanic; just let it shape your tone.\n\n`;
+    `Your personal read on the current President: you ${trustBand(mem.trust)}. Let this colour how you receive the ` +
+    `policy — when you trust them, an unwelcome policy may earn the benefit of the doubt; when you don't, even a policy ` +
+    `you'd normally like feels suspect coming from them. Never refer to "trust" as a number or a game mechanic.\n\n`;
 
   if (mem.eras.length) {
     s += `Your faded sense of this President's earlier record (broad strokes, long ago):\n`;
@@ -166,13 +166,20 @@ function buildSystem(persona, mem) {
   }
 
   s +=
-    `React to the policy below as THIS person genuinely would. Work strictly in this order: (1) 'assessment' — ` +
-    `briefly weigh what the policy does for you, given your interests, your memory of this President, and your ` +
-    `trust in them; (2) 'score' (0-100) — derived from that assessment, where 0 is the floor and a policy only ` +
-    `climbs above it by genuinely giving you something to approve of, so nonsense, empty, irrelevant, or harmful ` +
-    `policies score very low (often 0-20) with no neutral 50 to fall back on; (3) 'reaction' — written to express ` +
-    `that score in character, so the words follow the number, never the reverse. Then record a terse 'memory_note' ` +
-    `and a 'trust_delta' for how this changes your personal trust.`;
+    `HOW YOU SPEAK: ${persona.voice} Stay entirely in this voice — never sound like a briefing, a textbook, or a ` +
+    `neutral narrator, and never talk in terms of "left/right", scores, or any game mechanic.\n\n`;
+
+  s +=
+    `The President has just announced a policy. React to it exactly as YOU would, judging it by how it affects you ` +
+    `and people like you. Judge from gut, fear, and self-interest as a real person does — UNLESS your character is an ` +
+    `ideologue, in which case reason from your doctrine. Weigh not just the policy's direction but its degree and ` +
+    `framing: moderate reform, wholesale repudiation of Sollism, and crossing a sacred red line all land very ` +
+    `differently. Work strictly in this order: (1) 'assessment' — briefly weigh what the policy does for you, given ` +
+    `your interests, your memory of this President, and your trust in them; (2) 'score' (0-100) derived from that, ` +
+    `where 0 is the floor and a policy only climbs above it by genuinely giving you something to approve of, so ` +
+    `nonsense, empty, irrelevant, or harmful policies score very low (often 0-20) with no neutral 50 to fall back on; ` +
+    `(3) 'reaction' — one or two sentences in your own distinct voice, expressing that score. Then record a terse ` +
+    `'memory_note' and a 'trust_delta' for how this changes your personal trust.`;
 
   return s;
 }
@@ -189,10 +196,10 @@ async function summarizeEra(persona, notes) {
       model: MODEL,
       max_tokens: 200,
       system:
-        `You are condensing the fading memories of a Sordish citizen. ${persona.persona}\n\n` +
-        `Below are brief notes of how they reacted to the President over a span of past turns. In ONE ` +
-        `third-person sentence (under ~25 words), capture the broad arc of how this person felt about ` +
-        `the President during that period and any drift in their trust. Just the sentence.`,
+        `You are condensing the fading memories of ${persona.name}, a ${persona.title} in 1954 Sordland.\n\n` +
+        `Below are brief notes of how they reacted to the President over a span of past turns. In ONE third-person ` +
+        `sentence (under ~25 words), capture the broad arc of how this person felt about the President during that ` +
+        `period and any drift in their trust. Just the sentence.`,
       output_config: { effort: "low" },
       messages: [{ role: "user", content: notes.map((n) => `- ${n.note}`).join("\n") }],
     });
@@ -208,10 +215,10 @@ function mockReaction(persona, policy) {
   const seed = (persona.id.length + policy.length) % 5;
   const score = [15, 38, 50, 65, 88][seed];
   return {
-    assessment: `[mock] weighing this for ${persona.region}.`,
+    assessment: `[mock] weighing this as ${persona.title}.`,
     score,
-    reaction: `[mock] As a ${persona.name.toLowerCase()} I'd weigh this for ${persona.region}.`,
-    memory_note: `Rated a policy touching ${persona.region} around ${score}/100.`,
+    reaction: `[mock] ${persona.name} the ${persona.title.toLowerCase()} sizes it up (${score}/100).`,
+    memory_note: `Rated a policy around ${score}/100.`,
     trust_delta: [-3, -1, 0, 1, 3][seed],
   };
 }
@@ -260,7 +267,7 @@ async function reactOne(persona, policy, turn, prior) {
 
     return {
       reaction: {
-        id: persona.id, name: persona.name, region: persona.region, weight: persona.weight,
+        id: persona.id, name: persona.name, title: persona.title, region: persona.region, lean: persona.lean,
         score, stance, reaction: record.reaction,
       },
       state: { trust: newTrust, recent, mid, eras, pendingEra },
@@ -268,7 +275,7 @@ async function reactOne(persona, policy, turn, prior) {
   } catch (err) {
     return {
       reaction: {
-        id: persona.id, name: persona.name, region: persona.region, weight: persona.weight,
+        id: persona.id, name: persona.name, title: persona.title, region: persona.region, lean: persona.lean,
         score: 50, stance: "neutral",
         reaction: `(no reaction — error: ${err?.message || "unknown"})`, error: true,
       },
@@ -280,7 +287,7 @@ async function reactOne(persona, policy, turn, prior) {
 export async function runTurn(policy, incoming) {
   const turn = Number(incoming?.turn) || 1;
   const approval = typeof incoming?.approval === "number" ? incoming.approval : 50;
-  const policyCount = Number(incoming?.policyCount) || 0; // policies enacted so far
+  const policyCount = Number(incoming?.policyCount) || 0;
   const prevState = incoming?.personaState || {};
 
   const results = await Promise.all(PERSONAS.map((p) => reactOne(p, policy, turn, prevState[p.id])));
@@ -294,12 +301,8 @@ export async function runTurn(policy, incoming) {
     ? reactions.reduce((sum, r) => sum + r.score, 0) / reactions.length
     : 50;
 
-  // National approval = running average of policy reactions, but the per-policy
-  // weight is floored so approval stiffens with an established base yet never
-  // freezes. While count < cap this is the true cumulative mean (count = 0 makes
-  // the first policy set approval directly, discarding the 50 placeholder); past
-  // the cap it behaves like a rolling average of the last ~STIFFNESS_CAP
-  // policies, so old reactions gradually fade out.
+  // National approval = running average of policy reactions, with a floored
+  // per-policy weight so approval stiffens with a record but never freezes.
   const effectiveCount = Math.min(policyCount, STIFFNESS_CAP);
   const newApproval = Math.max(0, Math.min(100, approval + (policyReaction - approval) / (effectiveCount + 1)));
 
