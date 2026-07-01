@@ -22,6 +22,7 @@
 
 import Anthropic from "@anthropic-ai/sdk";
 import { PERSONAS } from "./personas.js";
+import { WORLD_CODEX } from "./lore.js";
 
 const MODEL = process.env.CLAUDE_MODEL || "claude-opus-4-8";
 const HAS_KEY = Boolean(process.env.ANTHROPIC_API_KEY);
@@ -94,22 +95,9 @@ const REACTION_FORMAT = {
   },
 };
 
-const WORLD =
-  `The year is 1954 in the Republic of Sordland, a semi-unitary presidential republic still emerging from two decades ` +
-  `of the founder Tarquin Soll's semi-authoritarian rule, and gripped by the Recession of 1951 (~16% unemployment, ` +
-  `7% inflation). The dominant national creed is SOLLISM — a home-grown, catch-all nationalism: a directed, ` +
-  `protectionist, technocratic state economy ("Sollonomics") with real welfare, sitting between capitalism and ` +
-  `communism; civic (not ethnic) nationalism in doctrine; republican in form. Most ordinary Sords treat Sollonomics ` +
-  `as plain common sense and revere Soll as the founding father who saved the republic from a fascist junta and a ` +
-  `communist general — even those who dislike his authoritarian legacy. Soll is still alive and holds a permanent, ` +
-  `unelected seat in the Grand National Assembly. The ruling USP is Sollist; the PFJP are liberal and social- ` +
-  `democratic reformers; the NFP are ethnic nationalists; the communists and Bludish movements are marginal. Abroad: ` +
-  `a hostile, nuclear-armed Kingdom of Rumburg, and a cold war between the capitalist ATO and the communist CSP, both ` +
-  `courting Sordland's tradition of armed neutrality.\n\n` +
-  `Matters most Sords hold near-sacred — crossing these hard "red lines" outrages even moderates: Soll's special ` +
-  `standing, heavy privatisation, too much free trade, too much immigration, and anti-militarism (gutting the army or ` +
-  `abandoning neutrality). And note the difference between MODERATING what Soll did (widely accepted, even welcomed) ` +
-  `and REPUDIATING Sollism itself (which cools even reformers to a tepid shrug, not warmth).`;
+// The shared world background (Sollism, the founding, the parties, the red
+// lines, etc.) lives in src/lore.js as WORLD_CODEX and is prepended to every
+// persona's system prompt as its own cache-controlled block — see liveReaction.
 
 function trustBand(t) {
   if (t < 20) return "barely trust this President and suspect their motives";
@@ -135,9 +123,9 @@ function normalize(prior) {
 }
 
 function buildSystem(persona, mem) {
-  let s = `${WORLD}\n\n`;
-
-  s += `YOU ARE ${persona.name} — the ${persona.title}, from ${persona.region}.\n${persona.persona}\n\n`;
+  // The shared WORLD_CODEX is sent as a separate cached block ahead of this one;
+  // here we only build the persona-specific half (identity, trust, memory, voice).
+  let s = `YOU ARE ${persona.name} — the ${persona.title}, from ${persona.region}.\n${persona.persona}\n\n`;
 
   s +=
     `Your personal read on the current President: you ${trustBand(mem.trust)}. Let this colour how you receive the ` +
@@ -227,7 +215,13 @@ async function liveReaction(persona, policy, mem) {
   const resp = await client.messages.create({
     model: MODEL,
     max_tokens: 1024,
-    system: buildSystem(persona, mem),
+    // Two-block system: the shared world codex first (identical across all 24
+    // calls, so cache_control lets the model reuse it instead of re-billing it),
+    // then this persona's own identity/memory/voice block.
+    system: [
+      { type: "text", text: WORLD_CODEX, cache_control: { type: "ephemeral" } },
+      { type: "text", text: buildSystem(persona, mem) },
+    ],
     output_config: { format: REACTION_FORMAT, effort: "low" },
     messages: [{ role: "user", content: `Policy announced by the President:\n\n"${policy}"` }],
   });
