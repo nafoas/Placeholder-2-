@@ -244,7 +244,9 @@ async function reactOne(persona, policy, turn, prior) {
 
     const record = {
       turn, policy: trim(policy, 120), stance, score,
-      reaction: trim(r.reaction, 240), note: trim(r.memory_note, 120),
+      // Roomy cap: personas write 1-2 sentences, but a vivid one can run long —
+      // this only guards against a runaway, it shouldn't chop a normal reaction.
+      reaction: trim(r.reaction, 700), note: trim(r.memory_note, 120),
     };
     let recent = [...mem.recent, record];
     let mid = [...mem.mid];
