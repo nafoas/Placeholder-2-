@@ -23,6 +23,9 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { PERSONAS } from "./personas.js";
 import { WORLD_CODEX } from "./lore.js";
+import {
+  INDICATOR_DEFAULTS, NATIONAL_FORMAT, buildNationalSystem, applyDeltas, mockDeltas,
+} from "./indicators.js";
 
 const MODEL = process.env.CLAUDE_MODEL || "claude-opus-4-8";
 const HAS_KEY = Boolean(process.env.ANTHROPIC_API_KEY);
@@ -284,17 +287,62 @@ async function reactOne(persona, policy, turn, prior) {
   }
 }
 
+// --- National ledger (one neutral estimate per turn) -----------------------
+async function assessNational(policy, indicators) {
+  if (MODE !== "live") return mockDeltas(policy);
+  try {
+    const resp = await client.messages.create({
+      model: MODEL,
+      max_tokens: 700,
+      // Same two-block system as personas: the cached codex, then the ledger role.
+      system: [
+        { type: "text", text: WORLD_CODEX, cache_control: { type: "ephemeral" } },
+        { type: "text", text: buildNationalSystem() },
+      ],
+      output_config: { format: NATIONAL_FORMAT, effort: "low" },
+      messages: [{
+        role: "user",
+        content:
+          `Policy announced by the President:\n\n"${policy}"\n\n` +
+          `The nation's current condition: treasury ${indicators.treasury}bn ren, unemployment ` +
+          `${indicators.unemployment}%, inflation ${indicators.inflation}%, stability ${indicators.stability}/100, ` +
+          `international standing ${indicators.standing}/100. Estimate how THIS policy shifts each.`,
+      }],
+    });
+    const block = resp.content.find((b) => b.type === "text");
+    return JSON.parse(block.text);
+  } catch (err) {
+    return { ...mockDeltas(policy), ledger_note: `(ledger error: ${err?.message || "unknown"})` };
+  }
+}
+
 export async function runTurn(policy, incoming) {
   const turn = Number(incoming?.turn) || 1;
   const approval = typeof incoming?.approval === "number" ? incoming.approval : 50;
   const policyCount = Number(incoming?.policyCount) || 0;
   const prevState = incoming?.personaState || {};
+  const prevIndicators = { ...INDICATOR_DEFAULTS, ...(incoming?.indicators || {}) };
 
-  const results = await Promise.all(PERSONAS.map((p) => reactOne(p, policy, turn, prevState[p.id])));
+  // The 24 opinions and the one neutral ledger estimate run together.
+  const [results, deltas] = await Promise.all([
+    Promise.all(PERSONAS.map((p) => reactOne(p, policy, turn, prevState[p.id]))),
+    assessNational(policy, prevIndicators),
+  ]);
 
   const reactions = results.map((r) => r.reaction);
   const personaState = {};
   PERSONAS.forEach((p, i) => { personaState[p.id] = results[i].state; });
+
+  // Fold the ledger's deltas into the country's material state.
+  const indicators = applyDeltas(prevIndicators, deltas);
+  const r1 = (n) => Math.round(n * 10) / 10;
+  const indicatorChanges = {
+    treasury: r1(indicators.treasury - prevIndicators.treasury),
+    unemployment: r1(indicators.unemployment - prevIndicators.unemployment),
+    inflation: r1(indicators.inflation - prevIndicators.inflation),
+    stability: indicators.stability - prevIndicators.stability,
+    standing: indicators.standing - prevIndicators.standing,
+  };
 
   // Policy's national reaction = plain, equal-weight average of persona scores.
   const policyReaction = reactions.length
@@ -313,6 +361,9 @@ export async function runTurn(policy, incoming) {
     policyReaction: Math.round(policyReaction * 10) / 10,
     approval: Math.round(newApproval * 10) / 10,
     approvalChange: Math.round((newApproval - approval) * 10) / 10,
-    state: { turn: turn + 1, approval: newApproval, policyCount: policyCount + 1, personaState },
+    indicators,
+    indicatorChanges,
+    ledgerNote: trim(deltas.ledger_note, 160),
+    state: { turn: turn + 1, approval: newApproval, policyCount: policyCount + 1, personaState, indicators },
   };
 }

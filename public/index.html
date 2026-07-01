@@ -67,6 +67,15 @@
   .card .react { margin-top: 6px; color: var(--ink); font-size: 14px; overflow-wrap: break-word; }
   .card .stance { font-size: 11px; text-transform: uppercase; letter-spacing: .5px; color: var(--muted); }
   .empty { color: var(--muted); text-align: center; padding: 40px 0; }
+  .indicators { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; margin-bottom: 10px; }
+  .stat { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 10px 12px; }
+  .stat .label { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .5px; }
+  .stat .value { font-size: 20px; font-weight: bold; margin-top: 2px; }
+  .stat .change { font-size: 12px; font-weight: bold; margin-top: 2px; min-height: 15px; }
+  .stat .gaugebar { height: 5px; background: var(--panel-2); border-radius: 3px; overflow: hidden; margin-top: 6px; }
+  .stat .gaugebar > span { display: block; height: 100%; background: var(--accent); transition: width .4s; }
+  .ledger { color: var(--muted); font-size: 13px; font-style: italic; margin: 0 0 20px; min-height: 16px; }
+  @media (max-width: 640px) { .indicators { grid-template-columns: repeat(2, 1fr); } }
 </style>
 </head>
 <body>
@@ -89,6 +98,9 @@
     </div>
   </div>
 
+  <div class="indicators" id="indicators"></div>
+  <div class="ledger" id="ledger"></div>
+
   <form id="policyForm">
     <textarea id="policy" placeholder="e.g. Nationalise Bergia Steel and guarantee every worker a minimum wage."></textarea>
     <button type="submit" id="enact">Enact</button>
@@ -107,9 +119,20 @@
   const changeColor = (d) => d > 0 ? "var(--pos)" : d < 0 ? "var(--neg)" : "var(--neutral)";
   const clamp = (n) => Math.max(0, Math.min(100, n));
 
-  // The whole game (standing + every persona's trust and memory) lives here and
-  // is saved to the browser, so it persists for as long as the game lasts.
-  const defaultGame = () => ({ turn: 1, approval: 50, policyCount: 0, personaState: {} });
+  // Starting condition of the nation — a country deep in the 1951 recession.
+  const DEFAULT_INDICATORS = { treasury: -1.2, unemployment: 16, inflation: 7, stability: 55, standing: 45 };
+  const INDICATOR_META = {
+    treasury:     { label: "Treasury",     kind: "balance", higherIsBetter: true },
+    unemployment: { label: "Unemployment", kind: "percent", higherIsBetter: false },
+    inflation:    { label: "Inflation",    kind: "percent", higherIsBetter: false },
+    stability:    { label: "Stability",    kind: "gauge",   higherIsBetter: true },
+    standing:     { label: "Standing",     kind: "gauge",   higherIsBetter: true },
+  };
+  const INDICATOR_ORDER = ["treasury", "unemployment", "inflation", "stability", "standing"];
+
+  // The whole game (standing, the nation's indicators, and every persona's trust
+  // and memory) lives here and is saved to the browser, so it persists for the game.
+  const defaultGame = () => ({ turn: 1, approval: 50, policyCount: 0, personaState: {}, indicators: { ...DEFAULT_INDICATORS } });
 
   function load() {
     try {
@@ -117,6 +140,8 @@
       if (s && typeof s.approval === "number") {
         // migrate older saves that predate the running-average policy count
         if (typeof s.policyCount !== "number") s.policyCount = Math.max(0, (s.turn || 1) - 1);
+        // migrate saves from before national indicators existed
+        if (!s.indicators || typeof s.indicators !== "object") s.indicators = { ...DEFAULT_INDICATORS };
         return s;
       }
     } catch (_) {}
@@ -158,12 +183,53 @@
       });
   }
 
+  // A change is "good" if it moves the indicator in its beneficial direction
+  // (up for treasury/stability/standing, down for unemployment/inflation).
+  function changeSpan(key, d) {
+    if (d === undefined || d === null || d === 0) return "";
+    const meta = INDICATOR_META[key];
+    const good = meta.higherIsBetter ? d > 0 : d < 0;
+    const color = good ? "var(--pos)" : "var(--neg)";
+    const mag = (key === "treasury" || meta.kind === "percent") ? Math.abs(d).toFixed(1) : Math.abs(d);
+    return `<span style="color:${color}">${d > 0 ? "+" : "−"}${mag}</span>`;
+  }
+
+  function renderIndicators(changes) {
+    const box = $("indicators");
+    box.innerHTML = "";
+    const ind = game.indicators || DEFAULT_INDICATORS;
+    INDICATOR_ORDER.forEach((key) => {
+      const meta = INDICATOR_META[key];
+      const v = Number(ind[key]);
+      let valueText, valueColor = "var(--ink)";
+      if (key === "treasury") {
+        valueText = (v >= 0 ? "+" : "−") + Math.abs(v).toFixed(1) + " bn";
+        valueColor = v > 0 ? "var(--pos)" : v < 0 ? "var(--neg)" : "var(--ink)";
+      } else if (meta.kind === "percent") {
+        valueText = v.toFixed(1) + "%";
+      } else {
+        valueText = String(Math.round(v));
+      }
+      const gauge = meta.kind === "gauge"
+        ? `<div class="gaugebar"><span style="width:${clamp(v)}%"></span></div>` : "";
+      const tile = document.createElement("div");
+      tile.className = "stat";
+      tile.innerHTML =
+        `<div class="label">${meta.label}</div>
+         <div class="value" style="color:${valueColor}">${valueText}</div>
+         <div class="change">${changes ? changeSpan(key, changes[key]) : ""}</div>
+         ${gauge}`;
+      box.appendChild(tile);
+    });
+  }
+
   async function init() {
     try {
       const s = await fetch("/api/state").then((r) => r.json());
       $("mode").textContent = s.mode === "live" ? "live AI" : "mock mode";
     } catch (_) { $("mode").textContent = "offline"; }
     renderApproval();
+    renderIndicators();
   }
 
   $("newGame").addEventListener("click", (e) => {
@@ -174,7 +240,9 @@
     $("reactions").innerHTML = '<div class="empty">No policy enacted yet.</div>';
     $("policyScore").textContent = "—";
     $("lastChange").textContent = "—";
+    $("ledger").textContent = "";
     renderApproval();
+    renderIndicators();
   });
 
   $("policyForm").addEventListener("submit", async (e) => {
@@ -188,8 +256,8 @@
       const res = await fetch("/api/turn", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        // send the carried-forward standing + memory + trust so personas remember
-        body: JSON.stringify({ policy, state: { turn: game.turn, approval: game.approval, policyCount: game.policyCount, personaState: game.personaState } }),
+        // send the carried-forward standing + indicators + memory + trust
+        body: JSON.stringify({ policy, state: { turn: game.turn, approval: game.approval, policyCount: game.policyCount, personaState: game.personaState, indicators: game.indicators } }),
       }).then((r) => r.json());
       if (res.error) throw new Error(res.error);
 
@@ -198,10 +266,13 @@
       game.turn = res.state.turn;
       game.policyCount = res.state.policyCount;
       game.personaState = res.state.personaState;
+      game.indicators = res.state.indicators;
       save();
 
       renderApproval(res.policyReaction, res.approvalChange);
+      renderIndicators(res.indicatorChanges);
       renderReactions(res.reactions);
+      $("ledger").textContent = res.ledgerNote || "";
       $("hint").textContent = "The nation remembers. Keep going — or contradict yourself and see who notices.";
     } catch (err) {
       $("hint").textContent = "Error: " + err.message;
