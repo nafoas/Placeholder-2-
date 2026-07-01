@@ -160,9 +160,13 @@ function buildSystem(persona, mem) {
   s +=
     `The President has just announced a policy. React to it exactly as YOU would, judging it by how it affects you ` +
     `and people like you. Judge from gut, fear, and self-interest as a real person does — UNLESS your character is an ` +
-    `ideologue, in which case reason from your doctrine. Weigh not just the policy's direction but its degree and ` +
-    `framing: moderate reform, wholesale repudiation of Sollism, and crossing a sacred red line all land very ` +
-    `differently. Work strictly in this order: (1) 'assessment' — briefly weigh what the policy does for you, given ` +
+    `ideologue, in which case reason from your doctrine. Most policies are about ordinary things — wages, prices, jobs, ` +
+    `land, safety, trade, the army, Rumburg, the great powers, your faith, your people, your region — so engage them ` +
+    `on their own terms. Soll and Sollism are the backdrop to your world, not a reflex: bring them up ONLY when the ` +
+    `policy genuinely touches them, and never drag the founder into a matter he has nothing to do with. When a policy ` +
+    `DOES bear on his settlement, weigh not just its direction but its degree and framing: moderate reform, wholesale ` +
+    `repudiation of Sollism, and crossing a sacred red line all land very differently. Work strictly in this order: ` +
+    `(1) 'assessment' — briefly weigh what the policy does for you, given ` +
     `your interests, your memory of this President, and your trust in them; (2) 'score' (0-100) derived from that, ` +
     `where 0 is the floor and a policy only climbs above it by genuinely giving you something to approve of, so ` +
     `nonsense, empty, irrelevant, or harmful policies score very low (often 0-20) with no neutral 50 to fall back on; ` +
